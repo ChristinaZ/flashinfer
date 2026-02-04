@@ -23,7 +23,9 @@ namespace routingRenormalize {
 static constexpr int NumThreads = 1024;
 static constexpr int NumWarps = NumThreads / WarpSize;
 static constexpr int MaxNumTopExperts = 10;
-static constexpr int NumExpertsLimit = 512;
+static constexpr int NumExpertsLimit512 = 512;
+static constexpr int NumExpertsLimit576 = 576;
+static constexpr int NumExpertsLimit = std::max(NumExpertsLimit512, NumExpertsLimit576);
 static constexpr int MaxNumTokensSingleCluster = NumBlocksPerCluster * NumThreads;
 static constexpr int MaxNumTokensSingleClusterScores = NumBlocksPerCluster * NumWarps;
 static constexpr int BlockKernelMaxNumTokens = 4;
@@ -391,8 +393,10 @@ __global__ void __launch_bounds__(KernelParams::MaxNumExperts)
 int32_t constexpr getMaxNumExperts(int32_t numExperts) {
   if (numExperts <= topk::MaxNumExpertsUnit) {
     return topk::MaxNumExpertsUnit;
-  } else if (numExperts <= NumExpertsLimit) {
-    return NumExpertsLimit;
+  } else if (numExperts <= NumExpertsLimit512) {
+    return NumExpertsLimit512;
+  } else if (numExperts <= NumExpertsLimit576) {
+    return NumExpertsLimit576;
   } else {
     TLLM_LOG_ERROR("Unsupported numExperts");
     return 0;
@@ -406,9 +410,12 @@ int32_t constexpr getMaxNumExperts(int32_t numExperts) {
   if (data.mNumExperts <= topk::MaxNumExpertsUnit) {                                           \
     LAUNCH_ROUTING_WITH_NUM_EXPERTS(data, coopLaunch, kernel, numBlocks, numThreads, smemSize, \
                                     stream, extraFlag1, topk::MaxNumExpertsUnit);              \
-  } else if (data.mNumExperts <= NumExpertsLimit) {                                            \
+  } else if (data.mNumExperts <= NumExpertsLimit512) {                                         \
     LAUNCH_ROUTING_WITH_NUM_EXPERTS(data, coopLaunch, kernel, numBlocks, numThreads, smemSize, \
-                                    stream, extraFlag1, NumExpertsLimit);                      \
+                                    stream, extraFlag1, NumExpertsLimit512);                   \
+  } else if (data.mNumExperts <= NumExpertsLimit576) {                                         \
+    LAUNCH_ROUTING_WITH_NUM_EXPERTS(data, coopLaunch, kernel, numBlocks, numThreads, smemSize, \
+                                    stream, extraFlag1, NumExpertsLimit576);                   \
   } else {                                                                                     \
     TLLM_LOG_ERROR("Unsupported numExperts");                                                  \
   }

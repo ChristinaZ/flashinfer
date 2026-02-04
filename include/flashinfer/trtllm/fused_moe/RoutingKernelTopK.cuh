@@ -108,6 +108,76 @@ struct TopKRedType {
 template <int N, typename RedType>
 struct Sort;
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Helper to check if N is a power of 2
+template <int N>
+struct IsPowerOf2 {
+  static constexpr bool value = (N > 0) && ((N & (N - 1)) == 0);
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Primary template: Sorting network for any N elements (N <= 32)
+// Uses bitonic sort for power-of-2 sizes, odd-even sort for non-power-of-2
+template <int N, typename RedType>
+struct Sort {
+  static_assert(N > 0 && N <= 32, "Sort only supports N in range [1, 32]");
+
+  static __device__ void run(RedType* topK) {
+    if constexpr (IsPowerOf2<N>::value) {
+// Bitonic sort for power-of-2 sizes - more efficient
+#pragma unroll
+      for (int k = 2; k <= N; k *= 2) {
+#pragma unroll
+        for (int j = k / 2; j > 0; j /= 2) {
+#pragma unroll
+          for (int i = 0; i < N; ++i) {
+            int ixj = i ^ j;
+            if (ixj > i) {
+              if ((i & k) == 0) {
+                if (topK[i].compVal < topK[ixj].compVal) {
+                  auto tmp = topK[i].compVal;
+                  topK[i].compVal = topK[ixj].compVal;
+                  topK[ixj].compVal = tmp;
+                }
+              } else {
+                if (topK[i].compVal > topK[ixj].compVal) {
+                  auto tmp = topK[i].compVal;
+                  topK[i].compVal = topK[ixj].compVal;
+                  topK[ixj].compVal = tmp;
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+// Odd-even transposition sort for non-power-of-2 sizes
+#pragma unroll
+      for (int pass = 0; pass < N; ++pass) {
+#pragma unroll
+        for (int i = 0; i < N - 1; i += 2) {
+          if (topK[i].compVal < topK[i + 1].compVal) {
+            auto tmp = topK[i].compVal;
+            topK[i].compVal = topK[i + 1].compVal;
+            topK[i + 1].compVal = tmp;
+          }
+        }
+#pragma unroll
+        for (int i = 1; i < N - 1; i += 2) {
+          if (topK[i].compVal < topK[i + 1].compVal) {
+            auto tmp = topK[i].compVal;
+            topK[i].compVal = topK[i + 1].compVal;
+            topK[i + 1].compVal = tmp;
+          }
+        }
+      }
+    }
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Explicit specializations for small N values (hand-optimized sorting networks)
+
 template <typename RedType>
 struct Sort<1, RedType> {
   static __device__ void run(RedType* topK) {}
@@ -138,6 +208,90 @@ struct Sort<4, RedType> {
   }
 };
 
+template <typename RedType>
+struct Sort<5, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(3, 4);
+    TOPK_SWAP(2, 4);
+    TOPK_SWAP(2, 3);
+    TOPK_SWAP(1, 4);
+    TOPK_SWAP(0, 3);
+    TOPK_SWAP(0, 2);
+    TOPK_SWAP(1, 3);
+    TOPK_SWAP(1, 2);
+  }
+};
+
+template <typename RedType>
+struct Sort<6, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(1, 2);
+    TOPK_SWAP(0, 2);
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(4, 5);
+    TOPK_SWAP(3, 5);
+    TOPK_SWAP(3, 4);
+    TOPK_SWAP(0, 3);
+    TOPK_SWAP(1, 4);
+    TOPK_SWAP(2, 5);
+    TOPK_SWAP(2, 4);
+    TOPK_SWAP(1, 3);
+    TOPK_SWAP(2, 3);
+  }
+};
+
+template <typename RedType>
+struct Sort<7, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(1, 2);
+    TOPK_SWAP(0, 2);
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(3, 4);
+    TOPK_SWAP(5, 6);
+    TOPK_SWAP(3, 5);
+    TOPK_SWAP(4, 6);
+    TOPK_SWAP(4, 5);
+    TOPK_SWAP(0, 4);
+    TOPK_SWAP(0, 3);
+    TOPK_SWAP(1, 5);
+    TOPK_SWAP(2, 6);
+    TOPK_SWAP(2, 5);
+    TOPK_SWAP(1, 3);
+    TOPK_SWAP(2, 4);
+    TOPK_SWAP(2, 3);
+  }
+};
+
+template <typename RedType>
+struct Sort<8, RedType> {
+  static __device__ void run(RedType* topK) {
+    TOPK_SWAP(0, 1);
+    TOPK_SWAP(2, 3);
+    TOPK_SWAP(4, 5);
+    TOPK_SWAP(6, 7);
+
+    TOPK_SWAP(0, 2);
+    TOPK_SWAP(1, 3);
+    TOPK_SWAP(4, 6);
+    TOPK_SWAP(5, 7);
+
+    TOPK_SWAP(1, 2);
+    TOPK_SWAP(5, 6);
+
+    TOPK_SWAP(0, 4);
+    TOPK_SWAP(1, 5);
+    TOPK_SWAP(2, 6);
+    TOPK_SWAP(3, 7);
+
+    TOPK_SWAP(2, 4);
+    TOPK_SWAP(3, 5);
+
+    TOPK_SWAP(1, 2);
+    TOPK_SWAP(3, 4);
+    TOPK_SWAP(5, 6);
+  }
+};
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int K, typename Type>
@@ -167,7 +321,7 @@ __forceinline__ __device__ void reduceTopKFunc(cg::thread_block_tile<WarpSize> c
   static_assert(K > 0, "Top K must have K > 0");
   static_assert(K < WarpSize, "Top K must have K < WarpSize");
   static_assert(N > 0, "Top K must have N > 0");
-  static_assert(N < 5, "Only support candidates number less than or equal to 128");
+  static_assert(N <= 32, "Only support candidates number less than or equal to 32*32=1024");
   using RedType = TopKRedType<Type>;
   RedType topK[N];
 #pragma unroll
@@ -202,48 +356,10 @@ __forceinline__ __device__ void reduceTopK(cg::thread_block_tile<WarpSize> const
   static_assert(K > 0, "Top K must have K > 0");
   static_assert(K < WarpSize, "Top K must have K < WarpSize");
   static_assert(N > 0, "Top K must have N > 0");
-  static_assert(N <= 16, "Only support candidates number less than or equal to 16*32=512");
+  static_assert(N <= 32, "Only support candidates number less than or equal to 32*32=1024");
   using RedType = TopKRedType<Type>;
 
-  if constexpr (N <= 4) {
-    reduceTopKFunc<K, Type, N>(warp, out, outIdx, value, idx, minValue, actualK);
-  } else {
-    constexpr int numLoops = (N - 1) / 4 + 1;
-    constexpr int numResults = (numLoops * K - 1) / WarpSize + 1;
-
-    Type topKBufferValue[numResults];
-    int32_t topKBufferIdx[numResults];
-    int32_t laneIdx = threadIdx.x % WarpSize;
-
-    for (int ii = 0; ii < numResults; ++ii) {
-      topKBufferValue[ii] = minValue;
-      topKBufferIdx[ii] = ii * WarpSize - 1;
-    }
-    for (int loop = 0; loop < numLoops; ++loop) {
-      int start = loop * 4;
-      Type topKValue[K];
-      int32_t topKIdx[K];
-      Type inValue[4];
-      int32_t inIdx[4];
-      for (int i = 0; i < 4; ++i) {
-        inValue[i] = value[start + i];
-        inIdx[i] = idx[start + i];
-      }
-      reduceTopKFunc<K, Type, 4>(warp, topKValue, topKIdx, inValue, inIdx, minValue, actualK);
-      int inOffset = laneIdx % K;
-      if (laneIdx >= loop * K && laneIdx < (loop + 1) * K) {
-        topKBufferValue[0] = topKValue[inOffset];
-        topKBufferIdx[0] = topKIdx[inOffset];
-      }
-      if (loop == numLoops - 1 && (laneIdx < (numLoops * K - WarpSize))) {
-        topKBufferValue[1] = topKValue[inOffset];
-        topKBufferIdx[1] = topKIdx[inOffset];
-      }
-    }
-
-    reduceTopKFunc<K, Type, numResults>(warp, out, outIdx, topKBufferValue, topKBufferIdx, minValue,
-                                        actualK);
-  }
+  reduceTopKFunc<K, Type, N>(warp, out, outIdx, value, idx, minValue, actualK);
 };
 
 #undef TOPK_SWAP
